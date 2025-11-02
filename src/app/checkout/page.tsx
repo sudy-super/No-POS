@@ -1,12 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Card, Modal, Spin, message, Typography } from "antd";
-import { collection, getDocs, addDoc, Timestamp } from "firebase/firestore";
+import { collection, getDocs } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import VerifiedOnlyComponent from "../components/VerifiedOnlyComponent";
 import styles from "./page.module.scss";
 import { getAuth } from "firebase/auth";
+import {
+  saveSale,
+  watchSaleStatus,
+  type PendingStatus,
+} from "../lib/sales";
 
 const { Title } = Typography;
 
@@ -24,6 +29,10 @@ export default function CheckoutPage() {
   const [lastSaleItems, setLastSaleItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastTotal, setLastTotal] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<PendingStatus>("synced");
+  const [currentSaleId, setCurrentSaleId] = useState<string | null>(null);
+  const saleWatcherRef = useRef<null | (() => void)>(null);
 
   // 商品の読み込み
   useEffect(() => {
@@ -78,36 +87,52 @@ export default function CheckoutPage() {
       }));
   
     try {
-      await addDoc(collection(db, "sales"), {
-        items,
-        total,
-        createdAt: Timestamp.now(),
-        type: "sale",
-        uid: currentUser.uid,
+      setSubmitting(true);
+      setPendingStatus("pending");
+
+      const saleId = await saveSale({ items, total }, currentUser.uid);
+      setCurrentSaleId(saleId);
+
+      if (saleWatcherRef.current) {
+        saleWatcherRef.current();
+        saleWatcherRef.current = null;
+      }
+
+      const unsubscribe = watchSaleStatus(saleId, (status) => {
+        setPendingStatus(status);
+        if (status === "synced") {
+          unsubscribe();
+          saleWatcherRef.current = null;
+        }
       });
 
-      const targetProductIds = ["oKYDsv2zRCFldMb5n2xw", "kzv4Npr47H4veRoHpEfS", "wjIleZW1iDymcwS3oVwq"];
+      saleWatcherRef.current = unsubscribe;
 
-      const pubData = items
-        .filter(item => targetProductIds.includes(item.productId))
-        .map(item => ({
-          productId: item.productId,
-          quantity: item.quantity,
-        }));
-      
-      await addDoc(collection(db, "pub_sales"), {
-        items: pubData,
-        createdAt: Timestamp.now(),
-      });
-
+      // 在庫減算などの副作用は Cloud Functions (sales.onCreate) 等で処理する想定
       setLastSaleItems(items);
       setIsModalVisible(true);
       setLastTotal(total);
       setQuantities({});
     } catch (error) {
       message.error("会計処理に失敗しました");
+      setPendingStatus("synced");
+      setCurrentSaleId(null);
+      if (saleWatcherRef.current) {
+        saleWatcherRef.current();
+        saleWatcherRef.current = null;
+      }
+    } finally {
+      setSubmitting(false);
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (saleWatcherRef.current) {
+        saleWatcherRef.current();
+      }
+    };
+  }, []);
   
   if (loading) {
     return (
@@ -160,10 +185,19 @@ export default function CheckoutPage() {
             type="primary"
             className="w-full"
             onClick={handleCheckout}
-            disabled={total === 0}
+            disabled={total === 0 || submitting}
           >
             会計する
           </Button>
+          {(submitting || currentSaleId) && (
+            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
+              {submitting && !currentSaleId
+                ? "送信中..."
+                : pendingStatus === "pending"
+                ? "オフライン送信待ち…（接続復帰後に自動送信）"
+                : "同期済み"}
+            </div>
+          )}
         </div>
         <Modal
           title="会計完了"
