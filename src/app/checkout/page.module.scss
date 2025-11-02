@@ -1,0 +1,50 @@
+.cards {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 20px;
+  .card {
+    width: 250px;
+    margin: 0 auto;
+    .name {
+      font-size: 20px;
+    }
+    .price {
+      font-size: 18px;
+    }
+    .buttons {
+      margin-top: 5px;
+      .count {
+        font-size: 25px;
+        margin: 0 7px;
+      }
+    }
+  }
+}
+.total {
+  font-size: 24px;
+  margin-top: 15px;
+  margin-bottom: 5px;
+}
+@media (width <= 800px){
+  .title{
+    text-align: center;
+  }
+  .cards{
+    margin-bottom: 200px;
+  }
+  .control{
+    position: fixed;
+    z-index: 100;
+    bottom: 0;
+    right: 0;
+    width: calc(100% - 30px);
+    background: white;
+    padding: 15px;
+    box-shadow: 0px 0px 15px -4px #777777;
+    .total{
+      margin: 0;
+      margin-bottom: 5px;
+    }
+  }
+}
