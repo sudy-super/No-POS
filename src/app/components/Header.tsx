@@ -12,7 +12,7 @@ export default function Header() {
     <header className={styles.header}>
       <div className={styles.headerInner}>
         <div className={styles.logo}>
-          <a href="/">YadoPOS</a>
+          <a href="/">NoPOS</a>
         </div>
         <div className={styles.account}>
           {!loading && !user && <LoginButton />}
