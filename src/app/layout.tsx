@@ -4,8 +4,8 @@ import Header from "./components/Header";
 import { AuthProvider } from "./context/AuthContext";
 
 export const metadata: Metadata = {
-  title: "YadoPOS | やどかり祭用POSシステム",
-  description: "やどかり祭用POSシステム",
+  title: "NoPOS | 雙峰祭用POSシステム",
+  description: "顔ない連合雙峰祭用POSシステム",
 };
 
 export default function RootLayout({
