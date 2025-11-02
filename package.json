@@ -11,7 +11,8 @@
   "dependencies": {
     "@ant-design/plots": "^2.4.0",
     "antd": "^5.25.3",
-    "firebase": "^11.10.0",
+    "firebase": "^10.12.4",
+    "firebaseui": "^6.1.0",
     "next": "15.3.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
