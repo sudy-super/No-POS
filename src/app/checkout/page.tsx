@@ -10,7 +10,6 @@ import { getAuth } from "firebase/auth";
 import {
   saveSale,
   watchSaleStatus,
-  subscribePendingSalesCount,
   type PendingStatus,
 } from "../lib/sales";
 
@@ -32,10 +31,10 @@ export default function CheckoutPage() {
   const [currentSaleId, setCurrentSaleId] = useState<string | null>(null);
   const currentSaleIdRef = useRef<string | null>(null);
   const [pendingQueueCount, setPendingQueueCount] = useState(0);
-  const saleWatcherRef = useRef<{
-    saleId: string;
-    unsubscribe: () => void;
-  } | null>(null);
+  const pendingSaleIdsRef = useRef<Set<string>>(new Set<string>());
+  const saleWatchersRef = useRef<Map<string, () => void>>(
+    new Map<string, () => void>()
+  );
   const syncedClearTimerRef = useRef<{
     saleId: string;
     timerId: ReturnType<typeof setTimeout>;
@@ -52,6 +51,16 @@ export default function CheckoutPage() {
       }
       return prev;
     });
+  };
+  const updatePendingQueueCounter = () => {
+    setPendingQueueCount(pendingSaleIdsRef.current.size);
+  };
+  const clearSaleWatcher = (saleId: string) => {
+    const unsubscribe = saleWatchersRef.current.get(saleId);
+    if (unsubscribe) {
+      unsubscribe();
+      saleWatchersRef.current.delete(saleId);
+    }
   };
 
   // 商品の読み込み
@@ -74,14 +83,6 @@ export default function CheckoutPage() {
 
     fetchProducts();
   }, []);
-
-  useEffect(() => {
-    const unsubscribe = subscribePendingSalesCount(setPendingQueueCount);
-    return () => {
-      unsubscribe();
-    };
-  }, []);
-
   const handleQuantityChange = (id: string, delta: number) => {
     setQuantities((prev) => ({
       ...prev,
@@ -129,13 +130,10 @@ export default function CheckoutPage() {
         syncedClearTimerRef.current = null;
       }
 
-      if (saleWatcherRef.current) {
-        saleWatcherRef.current.unsubscribe();
-        saleWatcherRef.current = null;
-      }
-
       const { saleId, writePromise } = saveSale({ items, total }, currentUser.uid);
       updateCurrentSaleId(saleId);
+      pendingSaleIdsRef.current.add(saleId);
+      updatePendingQueueCounter();
 
       message.open({
         key: saleId,
@@ -147,31 +145,42 @@ export default function CheckoutPage() {
       setQuantities({});
 
       const unsubscribe = watchSaleStatus(saleId, (status) => {
-        setPendingStatus(status);
+        if (status === "pending") {
+          if (currentSaleIdRef.current === saleId) {
+            setPendingStatus("pending");
+          }
+          return;
+        }
+
         if (status === "synced") {
+          pendingSaleIdsRef.current.delete(saleId);
+          updatePendingQueueCounter();
+
           message.open({
             key: saleId,
             type: "success",
             content: `会計 ${saleId} の同期が完了しました`,
           });
-          if (saleWatcherRef.current?.saleId === saleId) {
-            saleWatcherRef.current.unsubscribe();
-            saleWatcherRef.current = null;
-          }
+          clearSaleWatcher(saleId);
+
           if (syncedClearTimerRef.current?.saleId === saleId) {
             clearTimeout(syncedClearTimerRef.current.timerId);
           }
-          const timerId = setTimeout(() => {
-            if (syncedClearTimerRef.current?.saleId === saleId) {
-              syncedClearTimerRef.current = null;
-            }
-            clearCurrentSaleId(saleId);
-          }, 3000);
-          syncedClearTimerRef.current = { saleId, timerId };
+
+          if (currentSaleIdRef.current === saleId) {
+            setPendingStatus("synced");
+            const timerId = setTimeout(() => {
+              if (syncedClearTimerRef.current?.saleId === saleId) {
+                syncedClearTimerRef.current = null;
+              }
+              clearCurrentSaleId(saleId);
+            }, 3000);
+            syncedClearTimerRef.current = { saleId, timerId };
+          }
         }
       });
 
-      saleWatcherRef.current = { saleId, unsubscribe };
+      saleWatchersRef.current.set(saleId, unsubscribe);
 
       writePromise.catch((error) => {
         console.error("会計ドキュメントの保存に失敗しました", error);
@@ -181,17 +190,15 @@ export default function CheckoutPage() {
           content: `会計 ${saleId} の保存に失敗しました。再試行してください。`,
           duration: 0,
         });
-        setPendingStatus("failed");
-        if (saleWatcherRef.current?.saleId === saleId) {
-          saleWatcherRef.current.unsubscribe();
-          saleWatcherRef.current = null;
-        }
+        pendingSaleIdsRef.current.delete(saleId);
+        updatePendingQueueCounter();
+        clearSaleWatcher(saleId);
         if (syncedClearTimerRef.current?.saleId === saleId) {
           clearTimeout(syncedClearTimerRef.current.timerId);
           syncedClearTimerRef.current = null;
         }
-        const isActiveSale = currentSaleIdRef.current === saleId;
-        if (isActiveSale) {
+        if (currentSaleIdRef.current === saleId) {
+          setPendingStatus("failed");
           updateCurrentSaleId(null);
           setQuantities(previousQuantities);
         }
@@ -199,11 +206,13 @@ export default function CheckoutPage() {
     } catch (error) {
       message.error("会計処理に失敗しました");
       setPendingStatus("failed");
-      updateCurrentSaleId(null);
-      if (saleWatcherRef.current) {
-        saleWatcherRef.current.unsubscribe();
-        saleWatcherRef.current = null;
+      const activeSaleId = currentSaleIdRef.current;
+      if (activeSaleId) {
+        pendingSaleIdsRef.current.delete(activeSaleId);
+        updatePendingQueueCounter();
+        clearSaleWatcher(activeSaleId);
       }
+      updateCurrentSaleId(null);
       if (syncedClearTimerRef.current) {
         clearTimeout(syncedClearTimerRef.current.timerId);
         syncedClearTimerRef.current = null;
@@ -216,14 +225,15 @@ export default function CheckoutPage() {
 
   useEffect(() => {
     return () => {
-      if (saleWatcherRef.current) {
-        saleWatcherRef.current.unsubscribe();
-        saleWatcherRef.current = null;
-      }
+      saleWatchersRef.current.forEach((unsubscribe) => {
+        unsubscribe();
+      });
+      saleWatchersRef.current.clear();
       if (syncedClearTimerRef.current) {
         clearTimeout(syncedClearTimerRef.current.timerId);
         syncedClearTimerRef.current = null;
       }
+      pendingSaleIdsRef.current.clear();
     };
   }, []);
   
