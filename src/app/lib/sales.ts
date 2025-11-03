@@ -3,8 +3,10 @@
 import { db } from "./firebase";
 import {
   DocumentSnapshot,
+  collection,
   doc,
   onSnapshot,
+  query,
   serverTimestamp,
   setDoc,
 } from "firebase/firestore";
@@ -63,6 +65,23 @@ export function watchSaleStatus(
     (snap) => {
       const pending = snap.metadata.hasPendingWrites;
       cb(pending ? "pending" : "synced", snap);
+    }
+  );
+}
+
+/**
+ * sales コレクション内でローカル未同期のドキュメント件数を購読する。
+ */
+export function subscribePendingSalesCount(cb: (count: number) => void) {
+  const salesQuery = query(collection(db, "sales"));
+  return onSnapshot(
+    salesQuery,
+    { includeMetadataChanges: true },
+    (snapshot) => {
+      const pendingCount = snapshot.docs.filter(
+        (docSnap) => docSnap.metadata.hasPendingWrites
+      ).length;
+      cb(pendingCount);
     }
   );
 }

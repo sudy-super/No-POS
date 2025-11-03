@@ -10,6 +10,7 @@ import { getAuth } from "firebase/auth";
 import {
   saveSale,
   watchSaleStatus,
+  subscribePendingSalesCount,
   type PendingStatus,
 } from "../lib/sales";
 
@@ -30,6 +31,7 @@ export default function CheckoutPage() {
   const [pendingStatus, setPendingStatus] = useState<PendingStatus>("synced");
   const [currentSaleId, setCurrentSaleId] = useState<string | null>(null);
   const currentSaleIdRef = useRef<string | null>(null);
+  const [pendingQueueCount, setPendingQueueCount] = useState(0);
   const saleWatcherRef = useRef<{
     saleId: string;
     unsubscribe: () => void;
@@ -71,6 +73,13 @@ export default function CheckoutPage() {
     };
 
     fetchProducts();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = subscribePendingSalesCount(setPendingQueueCount);
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   const handleQuantityChange = (id: string, delta: number) => {
@@ -269,7 +278,7 @@ export default function CheckoutPage() {
             type="primary"
             className="w-full"
             onClick={handleCheckout}
-            disabled={total === 0 || submitting}
+            disabled={total === 0}
           >
             会計する
           </Button>
@@ -284,6 +293,9 @@ export default function CheckoutPage() {
                 : "同期済み"}
             </div>
           )}
+          <div style={{ marginTop: 4, fontSize: 12, opacity: 0.6 }}>
+            待機中の会計: {pendingQueueCount}件
+          </div>
         </div>
       </main>
     </VerifiedOnlyComponent>
