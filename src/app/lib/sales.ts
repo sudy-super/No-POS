@@ -22,23 +22,32 @@ export type Cart = {
   total: number;
 };
 
-export type PendingStatus = "pending" | "synced";
+export type PendingStatus = "pending" | "synced" | "failed";
 
 /**
  * 冪等な会計ドキュメントを sales/{saleId} に保存する。
  * saleId はクライアント側で生成し、setDoc により同一 ID への再送を許容する。
  */
-export async function saveSale(cart: Cart, uid: string) {
+export type SaveSaleResult = {
+  saleId: string;
+  writePromise: Promise<void>;
+};
+
+/**
+ * 会計ドキュメントを非同期に保存し、即座に saleId を返す。
+ * writePromise を待たなくても Firestore のローカル永続化がキューに積んでくれる。
+ */
+export function saveSale(cart: Cart, uid: string): SaveSaleResult {
   const saleId = crypto.randomUUID();
   const ref = doc(db, "sales", saleId);
-  await setDoc(ref, {
+  const writePromise = setDoc(ref, {
     items: cart.items,
     total: cart.total,
     createdAt: serverTimestamp(),
     type: "sale",
     uid,
   });
-  return saleId;
+  return { saleId, writePromise };
 }
 
 /**

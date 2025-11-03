@@ -29,9 +29,28 @@ export default function CheckoutPage() {
   const [submitting, setSubmitting] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<PendingStatus>("synced");
   const [currentSaleId, setCurrentSaleId] = useState<string | null>(null);
-  const saleWatcherRef = useRef<null | (() => void)>(null);
-  const syncedClearTimerRef =
-    useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentSaleIdRef = useRef<string | null>(null);
+  const saleWatcherRef = useRef<{
+    saleId: string;
+    unsubscribe: () => void;
+  } | null>(null);
+  const syncedClearTimerRef = useRef<{
+    saleId: string;
+    timerId: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  const updateCurrentSaleId = (value: string | null) => {
+    currentSaleIdRef.current = value;
+    setCurrentSaleId(value);
+  };
+  const clearCurrentSaleId = (saleId: string) => {
+    setCurrentSaleId((prev) => {
+      if (prev === saleId) {
+        currentSaleIdRef.current = null;
+        return null;
+      }
+      return prev;
+    });
+  };
 
   // 商品の読み込み
   useEffect(() => {
@@ -90,22 +109,24 @@ export default function CheckoutPage() {
       return;
     }
 
+    const previousQuantities = { ...quantities };
+
     try {
       setSubmitting(true);
       setPendingStatus("pending");
 
       if (syncedClearTimerRef.current) {
-        clearTimeout(syncedClearTimerRef.current);
+        clearTimeout(syncedClearTimerRef.current.timerId);
         syncedClearTimerRef.current = null;
       }
 
       if (saleWatcherRef.current) {
-        saleWatcherRef.current();
+        saleWatcherRef.current.unsubscribe();
         saleWatcherRef.current = null;
       }
 
-      const saleId = await saveSale({ items, total }, currentUser.uid);
-      setCurrentSaleId(saleId);
+      const { saleId, writePromise } = saveSale({ items, total }, currentUser.uid);
+      updateCurrentSaleId(saleId);
 
       message.open({
         key: saleId,
@@ -124,31 +145,61 @@ export default function CheckoutPage() {
             type: "success",
             content: `会計 ${saleId} の同期が完了しました`,
           });
-          if (syncedClearTimerRef.current) {
-            clearTimeout(syncedClearTimerRef.current);
+          if (saleWatcherRef.current?.saleId === saleId) {
+            saleWatcherRef.current.unsubscribe();
+            saleWatcherRef.current = null;
           }
-          syncedClearTimerRef.current = setTimeout(() => {
-            setCurrentSaleId((prev) => (prev === saleId ? null : prev));
-            syncedClearTimerRef.current = null;
+          if (syncedClearTimerRef.current?.saleId === saleId) {
+            clearTimeout(syncedClearTimerRef.current.timerId);
+          }
+          const timerId = setTimeout(() => {
+            if (syncedClearTimerRef.current?.saleId === saleId) {
+              syncedClearTimerRef.current = null;
+            }
+            clearCurrentSaleId(saleId);
           }, 3000);
-          unsubscribe();
-          saleWatcherRef.current = null;
+          syncedClearTimerRef.current = { saleId, timerId };
         }
       });
 
-      saleWatcherRef.current = unsubscribe;
+      saleWatcherRef.current = { saleId, unsubscribe };
+
+      writePromise.catch((error) => {
+        console.error("会計ドキュメントの保存に失敗しました", error);
+        message.open({
+          key: saleId,
+          type: "error",
+          content: `会計 ${saleId} の保存に失敗しました。再試行してください。`,
+          duration: 0,
+        });
+        setPendingStatus("failed");
+        if (saleWatcherRef.current?.saleId === saleId) {
+          saleWatcherRef.current.unsubscribe();
+          saleWatcherRef.current = null;
+        }
+        if (syncedClearTimerRef.current?.saleId === saleId) {
+          clearTimeout(syncedClearTimerRef.current.timerId);
+          syncedClearTimerRef.current = null;
+        }
+        const isActiveSale = currentSaleIdRef.current === saleId;
+        if (isActiveSale) {
+          updateCurrentSaleId(null);
+          setQuantities(previousQuantities);
+        }
+      });
     } catch (error) {
       message.error("会計処理に失敗しました");
-      setPendingStatus("synced");
-      setCurrentSaleId(null);
+      setPendingStatus("failed");
+      updateCurrentSaleId(null);
       if (saleWatcherRef.current) {
-        saleWatcherRef.current();
+        saleWatcherRef.current.unsubscribe();
         saleWatcherRef.current = null;
       }
       if (syncedClearTimerRef.current) {
-        clearTimeout(syncedClearTimerRef.current);
+        clearTimeout(syncedClearTimerRef.current.timerId);
         syncedClearTimerRef.current = null;
       }
+      setQuantities(previousQuantities);
     } finally {
       setSubmitting(false);
     }
@@ -157,10 +208,12 @@ export default function CheckoutPage() {
   useEffect(() => {
     return () => {
       if (saleWatcherRef.current) {
-        saleWatcherRef.current();
+        saleWatcherRef.current.unsubscribe();
+        saleWatcherRef.current = null;
       }
       if (syncedClearTimerRef.current) {
-        clearTimeout(syncedClearTimerRef.current);
+        clearTimeout(syncedClearTimerRef.current.timerId);
+        syncedClearTimerRef.current = null;
       }
     };
   }, []);
@@ -226,6 +279,8 @@ export default function CheckoutPage() {
                 ? "送信中..."
                 : pendingStatus === "pending"
                 ? "オフライン送信待ち…（接続復帰後に自動送信）"
+                : pendingStatus === "failed"
+                ? "同期エラー。内容を確認して再送してください。"
                 : "同期済み"}
             </div>
           )}
