@@ -278,7 +278,6 @@ export default function CheckoutPage() {
             type="primary"
             className="w-full"
             onClick={handleCheckout}
-            disabled={total === 0}
           >
             会計する
           </Button>
