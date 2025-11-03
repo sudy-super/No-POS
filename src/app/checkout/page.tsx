@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Button, Card, Modal, Spin, message, Typography } from "antd";
+import { Button, Card, Spin, message, Typography } from "antd";
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import VerifiedOnlyComponent from "../components/VerifiedOnlyComponent";
@@ -25,14 +25,13 @@ type Product = {
 export default function CheckoutPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [quantities, setQuantities] = useState<{ [id: string]: number }>({});
-  const [isModalVisible, setIsModalVisible] = useState(false);
-  const [lastSaleItems, setLastSaleItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [lastTotal, setLastTotal] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<PendingStatus>("synced");
   const [currentSaleId, setCurrentSaleId] = useState<string | null>(null);
   const saleWatcherRef = useRef<null | (() => void)>(null);
+  const syncedClearTimerRef =
+    useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 商品の読み込み
   useEffect(() => {
@@ -70,12 +69,12 @@ export default function CheckoutPage() {
   const handleCheckout = async () => {
     const auth = getAuth();
     const currentUser = auth.currentUser;
-  
+
     if (!currentUser) {
       message.error("ユーザー情報が取得できません。ログインし直してください。");
       return;
     }
-  
+
     const items = products
       .filter((p) => quantities[p.id])
       .map((p) => ({
@@ -85,34 +84,59 @@ export default function CheckoutPage() {
         quantity: quantities[p.id],
         subtotal: p.price * quantities[p.id],
       }));
-  
+
+    if (items.length === 0) {
+      message.info("商品を選択してください。");
+      return;
+    }
+
     try {
       setSubmitting(true);
       setPendingStatus("pending");
 
-      const saleId = await saveSale({ items, total }, currentUser.uid);
-      setCurrentSaleId(saleId);
+      if (syncedClearTimerRef.current) {
+        clearTimeout(syncedClearTimerRef.current);
+        syncedClearTimerRef.current = null;
+      }
 
       if (saleWatcherRef.current) {
         saleWatcherRef.current();
         saleWatcherRef.current = null;
       }
 
+      const saleId = await saveSale({ items, total }, currentUser.uid);
+      setCurrentSaleId(saleId);
+
+      message.open({
+        key: saleId,
+        type: "info",
+        content: `会計をキューに追加しました（ID: ${saleId}）。同期中…`,
+        duration: 0,
+      });
+
+      setQuantities({});
+
       const unsubscribe = watchSaleStatus(saleId, (status) => {
         setPendingStatus(status);
         if (status === "synced") {
+          message.open({
+            key: saleId,
+            type: "success",
+            content: `会計 ${saleId} の同期が完了しました`,
+          });
+          if (syncedClearTimerRef.current) {
+            clearTimeout(syncedClearTimerRef.current);
+          }
+          syncedClearTimerRef.current = setTimeout(() => {
+            setCurrentSaleId((prev) => (prev === saleId ? null : prev));
+            syncedClearTimerRef.current = null;
+          }, 3000);
           unsubscribe();
           saleWatcherRef.current = null;
         }
       });
 
       saleWatcherRef.current = unsubscribe;
-
-      // 在庫減算などの副作用は Cloud Functions (sales.onCreate) 等で処理する想定
-      setLastSaleItems(items);
-      setIsModalVisible(true);
-      setLastTotal(total);
-      setQuantities({});
     } catch (error) {
       message.error("会計処理に失敗しました");
       setPendingStatus("synced");
@@ -120,6 +144,10 @@ export default function CheckoutPage() {
       if (saleWatcherRef.current) {
         saleWatcherRef.current();
         saleWatcherRef.current = null;
+      }
+      if (syncedClearTimerRef.current) {
+        clearTimeout(syncedClearTimerRef.current);
+        syncedClearTimerRef.current = null;
       }
     } finally {
       setSubmitting(false);
@@ -130,6 +158,9 @@ export default function CheckoutPage() {
     return () => {
       if (saleWatcherRef.current) {
         saleWatcherRef.current();
+      }
+      if (syncedClearTimerRef.current) {
+        clearTimeout(syncedClearTimerRef.current);
       }
     };
   }, []);
@@ -199,23 +230,6 @@ export default function CheckoutPage() {
             </div>
           )}
         </div>
-        <Modal
-          title="会計完了"
-          open={isModalVisible}
-          onOk={() => setIsModalVisible(false)}
-          onCancel={() => setIsModalVisible(false)}
-          okText="OK"
-        >
-          <p>以下の内容で会計が完了しました：</p>
-          <ul className="space-y-1 mt-2">
-            {lastSaleItems.map((item, index) => (
-              <li key={index}>
-                {item.name} x {item.quantity} = ¥{item.subtotal}
-              </li>
-            ))}
-          </ul>
-          <div className="mt-4 text-right font-bold">合計: ¥{lastTotal}</div>
-        </Modal>
       </main>
     </VerifiedOnlyComponent>
   );
